@@ -1,0 +1,94 @@
+---
+- name: Ensure download path exists
+  delegate_to: localhost
+  become: false
+  run_once: true
+  tags: [install, download]
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/cache"
+    state: directory
+
+- name: Check Caddy package file
+  delegate_to: localhost
+  become: false
+  register: caddy_archive_file
+  run_once: true
+  tags: [install, download]
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/cache/{{ caddy_archive }}"
+
+- name: Download Caddy package
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not caddy_archive_file.stat.exists | bool
+  ignore_errors: "{{ ansible_check_mode|bool }}"
+  retries: 3
+  delay: 2
+  register: caddy_download
+  tags: [install, download, skip_ansible_lint]
+  ansible.builtin.get_url:
+    url: "{{ caddy_download_url }}"
+    dest: "{{ playbook_dir }}/cache/{{ caddy_archive }}"
+    timeout: "180"
+    checksum: "{{ caddy_checksum_url | default(omit) }}"
+
+- name: Create temporary directory for extraction
+  delegate_to: localhost
+  become: false
+  register: install_temp
+  tags: [install, download]
+  run_once: true
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ansible-caddy.
+
+- name: Unarchive Caddy package
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ignore_errors: "{{ ansible_check_mode }}"
+  tags: [install, download, skip_ansible_lint]
+  ansible.builtin.unarchive:
+    src: "{{ playbook_dir }}/cache/{{ caddy_archive }}"
+    dest: "{{ install_temp.path }}/"
+    creates: "{{ install_temp.path }}/caddy"
+
+- name: Copy Caddy binary
+  tags: [install]
+  ansible.builtin.copy:
+    src: "{{ install_temp.path }}/caddy"
+    dest: "{{ caddy_bin }}"
+    mode: 0755
+  notify:
+    - restart caddy
+
+- name: Remove temporary directory
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ignore_errors: "{{ ansible_check_mode }}"
+  tags: [install, download]
+  ansible.builtin.file:
+    path: "{{ install_temp.path }}"
+    state: absent
+
+- name: Set capability on the binary file to be able to bind to TCP port <1024
+  when: caddy_setcap
+  tags: [install]
+  community.general.capabilities:
+    path: "{{ caddy_bin }}"
+    capability: cap_net_bind_service+eip
+    state: present
+
+- name: Template systemd service
+  tags: [install]
+  ansible.builtin.template:
+    src: caddy.service.j2
+    dest: "/etc/systemd/system/{{ caddy_service_name }}"
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+    - reload systemd
+    - restart caddy

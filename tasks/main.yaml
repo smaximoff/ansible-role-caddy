@@ -1,0 +1,60 @@
+---
+- name: Include tasks for pre-setup checks
+  ansible.builtin.include_tasks: preflight.yaml
+  
+- name: Include tasks to install packages
+  when: not (caddy_from_github | bool)
+  ansible.builtin.include_tasks:
+    file: "{{ item }}"
+  with_first_found:
+    - files:
+      - "install-{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yaml"
+      - "install-{{ ansible_distribution }}-{{ ansible_distribution_release }}.yaml"
+      - "install-{{ ansible_os_family }}.yaml"
+      - "packages-{{ ansible_pkg_mgr }}.yaml"
+      - "download.yaml"
+      skip: true
+
+- name: Include tasks to install from GitHub
+  when: caddy_from_github | bool
+  ansible.builtin.include_tasks: download.yaml
+
+- name: Create directories
+  loop:
+    - "{{ caddy_conf_dir }}"
+    - "{{ caddy_certs_dir }}"
+  ansible.builtin.file:
+    state: directory
+    path: "{{ item }}"
+    owner: "{{ caddy_user }}"
+    mode: 0770
+
+- name: Create log directory
+  ansible.builtin.file:
+    state: directory
+    path: "{{ caddy_log_dir }}"
+    owner: "{{ caddy_user }}"
+    mode: 0775
+
+- name: Get information about Caddy config file
+  register: caddy_config_stat
+  ansible.builtin.stat:
+    path: "{{ caddy_conf_dir }}/{{ caddy_conf_filename }}"
+
+- name: Create caddy config
+  when:
+    - caddy_config_update or not caddy_config_stat.stat.exists
+  notify:
+    - reload caddy
+  ansible.builtin.copy:
+    content: "{{ caddy_config }}"
+    dest: "{{ caddy_conf_dir }}/{{ caddy_conf_filename }}"
+    owner: "{{ caddy_user }}"
+    mode: 0640
+
+- name: Start Caddy service
+  ansible.builtin.systemd:
+    name: "{{ caddy_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true

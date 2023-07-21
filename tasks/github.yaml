@@ -1,0 +1,54 @@
+- name: Build headers to use when making requests to github
+  when: caddy_gh_token | length > 0
+  vars:
+    caddy_gh_token: >-
+      {{ lookup('ansible.builtin.env', 'GITHUB_API_TOKEN',
+      default=github_api_token) }}
+  ansible.builtin.set_fact:
+    caddy_github_headers: "{{ caddy_github_headers | combine({'Authorization': 'token ' + caddy_gh_token}) }}"
+
+- name: Get all Caddy releases
+  when: caddy_update
+  register: caddy_releases_cache
+  retries: 3
+  delay: 2
+  ansible.builtin.get_url:
+    url: https://api.github.com/repos/{{ caddy_gh_repo }}/git/refs/tags
+    dest: "{{ caddy_home }}/releases.txt"
+    force: true
+    headers: '{{ caddy_github_headers }}'
+    owner: "{{ caddy_user }}"
+    group: "{{ caddy_user_details.group }}"
+    mode: 0640
+
+- name: Set Caddy features
+  when: caddy_update
+  register: caddy_features_cache
+  ansible.builtin.copy:
+    content: "{{ ','.join(caddy_packages) }}"
+    dest: "{{ caddy_home }}/features.txt"
+    mode: 0640
+    owner: "{{ caddy_user }}"
+    group: "{{ caddy_user_details.group }}"
+
+- name: Get latest Caddy release details
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/{{ caddy_gh_repo }}/releases/latest
+    return_content: true
+    headers: '{{ caddy_github_headers }}'
+  register: latest_caddy_release
+
+- name: Set Caddy tag
+  ansible.builtin.set_fact:
+    caddy_tag: "{{ (latest_caddy_release.content | from_json).get('tag_name') }}"
+
+- name: Set Caddy version
+  ansible.builtin.set_fact:
+    caddy_version: "{{ caddy_tag | regex_replace('^v', '') }}"
+
+- name: Set Caddy urls
+  ansible.builtin.set_fact:
+    caddy_download_url: "https://github.com/{{ caddy_gh_repo }}/releases/download/\
+                {{ caddy_tag }}/caddy_{{ caddy_version }}_{{ caddy_os }}_{{ go_arch }}.tar.gz"
+    caddy_checksum_url: "sha512:https://github.com/{{ caddy_gh_repo }}/releases/download/\
+                         {{ caddy_tag }}/caddy_{{ caddy_version }}_checksums.txt"

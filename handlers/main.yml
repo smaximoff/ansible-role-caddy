@@ -1,0 +1,8 @@
+- name: reload systemd
+  service: daemon_reload=true
+
+- name: restart caddy
+  service: name={{ caddy_service_name }} state=restarted
+
+- name: reload caddy
+  service: name={{ caddy_service_name }} state=reloaded
